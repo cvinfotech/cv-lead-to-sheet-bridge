@@ -1,0 +1,151 @@
+name: Release Plugin
+
+# Only runs when a tag like v1.4.0 is pushed. Pushing commits, branches,
+# or non-"v" tags will NOT trigger this workflow.
+on:
+  push:
+    tags:
+      - "v*"
+
+# Least-privilege by default: only the permission this workflow actually
+# needs (creating a release + uploading an asset) is granted.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: ubuntu-latest
+
+    env:
+      PLUGIN_SLUG: cv-lead-to-sheet-bridge
+      PLUGIN_FILE: cv-lead-to-sheet-bridge.php
+
+    steps:
+      # ------------------------------------------------------------------
+      # 1. Checkout the exact commit the tag points to.
+      # ------------------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ------------------------------------------------------------------
+      # 2. Work out the version implied by the tag, and the versions
+      #    declared inside the plugin files, then compare all three.
+      #    This step fails the whole workflow (and skips everything
+      #    after it) if they don't match, so a release can never go out
+      #    with a mismatched version number.
+      # ------------------------------------------------------------------
+      - name: Validate tag matches plugin version
+        id: version
+        run: |
+          set -euo pipefail
+
+          # Strip the leading "v" from the tag, e.g. v1.4.0 -> 1.4.0
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+
+          # Pull "Version: 1.4.0" out of the plugin header.
+          # `tr -d '\r'` guards against CRLF line endings adding an
+          # invisible \r to the end of the captured value, which would
+          # otherwise make an identical-looking version fail to match.
+          PLUGIN_VERSION=$(grep -m1 -E '^[[:space:]]*\*?[[:space:]]*Version:' "$PLUGIN_FILE" \
+            | sed -E 's/.*Version:[[:space:]]*//' \
+            | tr -d '\r' \
+            | xargs)
+
+          # Pull "Stable tag: 1.4.0" out of readme.txt the same way.
+          README_VERSION=$(grep -m1 -E '^Stable tag:' readme.txt \
+            | sed -E 's/Stable tag:[[:space:]]*//' \
+            | tr -d '\r' \
+            | xargs)
+
+          echo "Tag version:      $TAG_VERSION"
+          echo "Plugin version:    $PLUGIN_VERSION"
+          echo "readme.txt version: $README_VERSION"
+
+          if [ -z "$PLUGIN_VERSION" ]; then
+            echo "::error::Could not find a 'Version:' header in $PLUGIN_FILE."
+            exit 1
+          fi
+
+          if [ -z "$README_VERSION" ]; then
+            echo "::error::Could not find a 'Stable tag:' line in readme.txt."
+            exit 1
+          fi
+
+          if [ "$TAG_VERSION" != "$PLUGIN_VERSION" ]; then
+            echo "::error::Version mismatch - the pushed tag is v${TAG_VERSION}, but ${PLUGIN_FILE} declares Version: ${PLUGIN_VERSION}. Update the plugin header (or push the correct tag) and try again."
+            exit 1
+          fi
+
+          if [ "$TAG_VERSION" != "$README_VERSION" ]; then
+            echo "::error::Version mismatch - the pushed tag is v${TAG_VERSION}, but readme.txt declares Stable tag: ${README_VERSION}. Update readme.txt (or push the correct tag) and try again."
+            exit 1
+          fi
+
+          echo "version=$TAG_VERSION" >> "$GITHUB_OUTPUT"
+
+      # ------------------------------------------------------------------
+      # 3. Build a clean copy of the plugin containing only the files
+      #    WordPress needs to install it, laid out inside a top-level
+      #    "cv-lead-to-sheet-bridge/" folder (the folder name a ZIP needs
+      #    when installed via Plugins > Add New > Upload Plugin).
+      # ------------------------------------------------------------------
+      - name: Stage plugin files
+        run: |
+          set -euo pipefail
+
+          STAGE_DIR="build/${PLUGIN_SLUG}"
+          mkdir -p "$STAGE_DIR"
+
+          # rsync copies everything from the repo root into the staging
+          # folder except the development-only files/folders listed below.
+          # -a preserves permissions/timestamps, -v is verbose for log
+          # readability, --delete keeps the staging folder from a
+          # previous (cached) run from lingering, and each --exclude
+          # keeps one class of file out of the shipped ZIP.
+          rsync -av --delete \
+            --exclude ".git/" \
+            --exclude ".github/" \
+            --exclude ".gitignore" \
+            --exclude "README.md" \
+            --exclude "LICENSE" \
+            --exclude "node_modules/" \
+            --exclude "vendor/" \
+            --exclude "tests/" \
+            --exclude "*.zip" \
+            --exclude ".DS_Store" \
+            --exclude "build/" \
+            ./ "$STAGE_DIR"/
+
+      # ------------------------------------------------------------------
+      # 4. Zip the staged folder. Zipping from inside build/ (rather than
+      #    the repo root) keeps the archive paths clean, e.g.
+      #    cv-lead-to-sheet-bridge/cv-lead-to-sheet-bridge.php
+      #    instead of build/cv-lead-to-sheet-bridge/cv-lead-to-sheet-bridge.php.
+      # ------------------------------------------------------------------
+      - name: Create plugin ZIP
+        run: |
+          set -euo pipefail
+          cd build
+          zip -r "../${PLUGIN_SLUG}.zip" "${PLUGIN_SLUG}" -x "*.DS_Store"
+          cd ..
+          echo "Archive contents:"
+          unzip -l "${PLUGIN_SLUG}.zip"
+
+      # ------------------------------------------------------------------
+      # 5. Create the GitHub Release and attach the ZIP as a release
+      #    asset. GitHub's auto-generated release notes are enabled, the
+      #    release title uses the friendly plugin name, and the release
+      #    is marked as Latest. Asset download counts are tracked by
+      #    GitHub automatically for any file attached this way - no
+      #    extra configuration needed.
+      # ------------------------------------------------------------------
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "CV Lead to Sheet Bridge v${{ steps.version.outputs.version }}"
+          generate_release_notes: true
+          make_latest: true
+          files: ${{ env.PLUGIN_SLUG }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

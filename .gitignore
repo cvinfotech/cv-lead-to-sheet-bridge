@@ -1,0 +1,49 @@
+# === OS junk ===
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# === Editor / IDE ===
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+*~
+
+# === Dependency directories (if tooling is ever added) ===
+/node_modules/
+/vendor/
+
+# === Build artifacts ===
+*.zip
+/dist/
+/build/
+
+# === Local environment / secrets ===
+.env
+.env.*
+*.local
+
+# === Logs (may contain webhook payloads, tokens, or lead PII) ===
+*.log
+/logs/
+debug.log
+error_log
+wp-content/debug.log
+
+# === Local WordPress dev tooling ===
+.wp-env.override.json
+/wp-env/
+
+# === Backups ===
+*.bak
+*.orig
+*.sql
+*.sql.gz
